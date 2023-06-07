@@ -1,13 +1,13 @@
 [package]
-name = "diamondback"
-version = "0.1.0"
 edition = "2021"
-rust-version = "1.65"
+name = "forest-flame"
+version = "0.1.0"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 im = "15.1.0"
+regex = "1.8.1"
 sexp = "1.1.4"
 
 [dev-dependencies]
