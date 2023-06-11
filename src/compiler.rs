@@ -111,7 +111,7 @@ pub fn compile(prg: &Prog) -> String {
                 Instr::Mov(MovArgs::ToReg(HEAP_PTR, Arg64::Reg(Rsi))),
                 Instr::Mov(MovArgs::ToReg(HEAP_END, Arg64::Reg(Rdx))),
             ]);
-            sess.compile_expr(&Ctxt::new(), Loc::Reg(Rax), &prg.main);
+            sess.compile_expr(&Ctxt::new(), Loc::Reg(Rax), &prg.main, true);
             sess.fun_exit(locals, &callee_saved);
 
             format!(
@@ -189,11 +189,11 @@ impl Session {
         let locals = depth(&fun.body);
         self.emit_instr(Instr::Label(fun_label(fun.name)));
         self.fun_entry(locals, &[Rbp]);
-        self.compile_expr(&Ctxt::with_params(&fun.params), Loc::Reg(Rax), &fun.body);
+        self.compile_expr(&Ctxt::with_params(&fun.params), Loc::Reg(Rax), &fun.body, true);
         self.fun_exit(locals, &[Rbp]);
     }
 
-    fn compile_expr(&mut self, cx: &Ctxt, dst: Loc, e: &Expr) {
+    fn compile_expr(&mut self, cx: &Ctxt, dst: Loc, e: &Expr, tail: bool) {
         match e {
             Expr::Number(n) => self.move_to(dst, n.repr64()),
             Expr::Boolean(b) => self.move_to(dst, b.repr64()),
@@ -203,10 +203,10 @@ impl Session {
                 let mut currcx = cx.clone();
                 for (var, rhs) in bindings {
                     let (nextcx, mem) = currcx.next_local();
-                    self.compile_expr(&currcx, Loc::Mem(mem), rhs);
+                    self.compile_expr(&currcx, Loc::Mem(mem), rhs, false);
                     currcx = nextcx.add_binding(*var, mem);
                 }
-                self.compile_expr(&currcx, Loc::Reg(Rax), body);
+                self.compile_expr(&currcx, Loc::Reg(Rax), body, tail);
                 self.memset(cx.si, bindings.len() as u32, Reg32::Imm(MEM_SET_VAL));
                 self.move_to(dst, Arg64::Reg(Rax))
             }
@@ -217,14 +217,14 @@ impl Session {
                 let else_lbl = format!("if_else_{tag}");
                 let end_lbl = format!("if_end_{tag}");
 
-                self.compile_expr(cx, Loc::Reg(Rax), e1);
+                self.compile_expr(cx, Loc::Reg(Rax), e1, false);
                 self.emit_instrs([
                     Instr::Cmp(BinArgs::ToReg(Rax, false.repr32().into())),
                     Instr::Je(else_lbl.clone()),
                 ]);
-                self.compile_expr(cx, dst, e2);
+                self.compile_expr(cx, dst, e2, tail);
                 self.emit_instrs([Instr::Jmp(end_lbl.clone()), Instr::Label(else_lbl)]);
-                self.compile_expr(cx, dst, e3);
+                self.compile_expr(cx, dst, e3, tail);
                 self.emit_instr(Instr::Label(end_lbl))
             }
             Expr::Loop(e) => {
@@ -233,12 +233,13 @@ impl Session {
                 let loop_end_lbl = format!("loop_end_{tag}");
 
                 self.emit_instr(Instr::Label(loop_start_lbl.clone()));
-                self.compile_expr(&cx.set_curr_lbl(&loop_end_lbl), dst, e);
+                // Body of a loop can never be in tail position
+                self.compile_expr(&cx.set_curr_lbl(&loop_end_lbl), dst, e, false);
                 self.emit_instrs([Instr::Jmp(loop_start_lbl), Instr::Label(loop_end_lbl)])
             }
             Expr::Break(e) => {
                 if let Some(lbl) = cx.curr_lbl {
-                    self.compile_expr(cx, dst, e);
+                    self.compile_expr(cx, dst, e, false);
                     self.emit_instr(Instr::Jmp(lbl.to_string()));
                 } else {
                     raise_break_outside_loop()
@@ -246,14 +247,14 @@ impl Session {
             }
             Expr::Set(var, e) => {
                 let mem = cx.lookup(*var);
-                self.compile_expr(cx, Loc::Mem(mem), e);
+                self.compile_expr(cx, Loc::Mem(mem), e, tail);
                 self.move_to(dst, Arg32::Mem(mem));
             }
             Expr::Block(es) => {
                 for e in &es[..es.len() - 1] {
-                    self.compile_expr(cx, Loc::Reg(Rcx), e);
+                    self.compile_expr(cx, Loc::Reg(Rcx), e, false);
                 }
-                self.compile_expr(cx, dst, &es[es.len() - 1]);
+                self.compile_expr(cx, dst, &es[es.len() - 1], tail);
             }
             Expr::Call(fun, args) => {
                 let Some(arity) = self.funs.get(fun) else {
@@ -262,6 +263,8 @@ impl Session {
                 if args.len() != *arity {
                     raise_wrong_number_of_args(*fun, *arity, args.len());
                 }
+
+                // TODO: Need to check if we are in tail position!!
 
                 let mut nargs = args.len() as i32;
                 if nargs % 2 == 0 {
@@ -274,7 +277,7 @@ impl Session {
                     nargs += 1;
                 }
                 for (i, arg) in args.iter().enumerate() {
-                    self.compile_expr(cx, Loc::Mem(mref![Rsp + %(8 * i)]), arg);
+                    self.compile_expr(cx, Loc::Mem(mref![Rsp + %(8 * i)]), arg, false);
                 }
                 self.emit_instrs([
                     Instr::Call(fun_label(*fun)),
@@ -299,8 +302,8 @@ impl Session {
                 let (nextcx, size_mem) = cx.next_local();
                 let (_, elem_mem) = nextcx.next_local();
 
-                self.compile_expr(cx, Loc::Mem(size_mem), size);
-                self.compile_expr(&nextcx, Loc::Mem(elem_mem), elem);
+                self.compile_expr(cx, Loc::Mem(size_mem), size, false);
+                self.compile_expr(&nextcx, Loc::Mem(elem_mem), elem, false);
                 self.emit_instr(Instr::Mov(MovArgs::ToReg(Rdi, Arg64::Mem(size_mem))));
                 self.check_is_num(Rdi);
                 self.emit_instrs([
@@ -348,7 +351,7 @@ impl Session {
                 let mut currcx = cx.clone();
                 for elem in elems {
                     let (nextcx, mem) = currcx.next_local();
-                    self.compile_expr(&currcx, Loc::Mem(mem), elem);
+                    self.compile_expr(&currcx, Loc::Mem(mem), elem, false);
                     currcx = nextcx;
                 }
 
@@ -392,9 +395,9 @@ impl Session {
                 let (nextcx1, vec_mem) = cx.next_local();
                 let (nextcx2, idx_mem) = nextcx1.next_local();
 
-                self.compile_expr(cx, Loc::Mem(vec_mem), vec);
-                self.compile_expr(&nextcx1, Loc::Mem(idx_mem), idx);
-                self.compile_expr(&nextcx2, Loc::Reg(Rsi), elem);
+                self.compile_expr(cx, Loc::Mem(vec_mem), vec, false);
+                self.compile_expr(&nextcx1, Loc::Mem(idx_mem), idx, false);
+                self.compile_expr(&nextcx2, Loc::Reg(Rsi), elem, false);
 
                 self.emit_instrs([
                     Instr::Mov(MovArgs::ToReg(Rax, Arg64::Mem(vec_mem))),
@@ -420,8 +423,8 @@ impl Session {
             Expr::VecGet(vec, idx) => {
                 let (nextcx, vec_mem) = cx.next_local();
 
-                self.compile_expr(cx, Loc::Mem(vec_mem), vec);
-                self.compile_expr(&nextcx, Loc::Reg(Rdi), idx);
+                self.compile_expr(cx, Loc::Mem(vec_mem), vec, false);
+                self.compile_expr(&nextcx, Loc::Reg(Rdi), idx, false);
 
                 self.emit_instrs([Instr::Mov(MovArgs::ToReg(Rax, Arg64::Mem(vec_mem)))]);
                 self.memset(cx.si, 1, Reg32::Imm(MEM_SET_VAL));
@@ -441,7 +444,7 @@ impl Session {
                 self.move_to(dst, Arg64::Reg(Rax));
             }
             Expr::VecLen(vec) => {
-                self.compile_expr(cx, Loc::Reg(Rax), vec);
+                self.compile_expr(cx, Loc::Reg(Rax), vec, false);
                 self.check_is_vec(Rax);
                 self.check_is_not_nil(Rax);
                 self.emit_instrs([
@@ -475,7 +478,7 @@ impl Session {
     }
 
     fn compile_un_op(&mut self, cx: &Ctxt, dst: Loc, op: Op1, e: &Expr) {
-        self.compile_expr(cx, Loc::Reg(Rax), e);
+        self.compile_expr(cx, Loc::Reg(Rax), e, false);
         match op {
             Op1::Add1 => {
                 self.check_is_num(Reg::Rax);
@@ -529,8 +532,8 @@ impl Session {
 
     fn compile_bin_op(&mut self, cx: &Ctxt, dst: Loc, op: Op2, e1: &Expr, e2: &Expr) {
         let (nextcx, mem) = cx.next_local();
-        self.compile_expr(cx, Loc::Mem(mem), e1);
-        self.compile_expr(&nextcx, Loc::Reg(Rcx), e2);
+        self.compile_expr(cx, Loc::Mem(mem), e1, false);
+        self.compile_expr(&nextcx, Loc::Reg(Rcx), e2, false);
         self.emit_instr(Instr::Mov(MovArgs::ToReg(Rax, Arg64::Mem(mem))));
         self.memset(cx.si, 1, Reg32::Imm(MEM_SET_VAL));
 
