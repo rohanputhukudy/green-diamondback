@@ -37,6 +37,7 @@ struct Ctxt<'a> {
     si: u32,
     curr_lbl: Option<&'a str>,
     in_fun: bool,
+    tail: bool,
 }
 
 impl<'a> Ctxt<'a> {
@@ -46,6 +47,7 @@ impl<'a> Ctxt<'a> {
             curr_lbl: None,
             env: im::HashMap::default(),
             in_fun: false,
+            tail: false,
         }
     }
 
@@ -60,6 +62,7 @@ impl<'a> Ctxt<'a> {
             curr_lbl: None,
             env,
             in_fun: true,
+            tail: false,
         }
     }
 
@@ -73,6 +76,13 @@ impl<'a> Ctxt<'a> {
     fn set_curr_lbl(&self, lbl: &'a str) -> Ctxt<'a> {
         Ctxt {
             curr_lbl: Some(lbl),
+            ..self.clone()
+        }
+    }
+
+    fn set_tail(&self, new_tail: &'a bool) -> Ctxt<'a> {
+        Ctxt {
+            tail: Some(new_tail).is_some(),
             ..self.clone()
         }
     }

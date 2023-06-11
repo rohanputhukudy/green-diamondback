@@ -1,7 +1,7 @@
-(fun (sum-of-squares n)
+(fun (sum-of-squares n acc)
     (if (= n 1)
         1
-        (+ (* n n) (sum-of-squares (sub1 n)))
+        (sum-of-squares (sub1 n) (+ acc (* n n)))
     )
 )
-(sum-of-squares 1000000)
+(sum-of-squares 1000000 0)
