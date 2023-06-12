@@ -1,8 +1,8 @@
-(fun (sum acc n)
+(fun (sum n acc)
     (if (< n 1)
         acc
-        (sum (+ n acc) (sub1 n))
+        (sum (sub1 n) (+ n acc))
     )
 )
 
-(sum 0 1000000)
+(sum 1000000 0)
