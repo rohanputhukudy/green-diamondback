@@ -1,0 +1,10 @@
+(fun (max a b)
+    (block
+        (print a)
+        (if (>= a b)
+            (print a)
+            (max b a)
+        )
+    )
+)
+(max 7 10)

@@ -111,7 +111,7 @@ pub fn compile(prg: &Prog) -> String {
                 Instr::Mov(MovArgs::ToReg(HEAP_PTR, Arg64::Reg(Rsi))),
                 Instr::Mov(MovArgs::ToReg(HEAP_END, Arg64::Reg(Rdx))),
             ]);
-            sess.compile_expr(&Ctxt::new(), Loc::Reg(Rax), &prg.main, true);
+            sess.compile_expr(&Ctxt::new(), Loc::Reg(Rax), &prg.main, false);
             sess.fun_exit(locals, &callee_saved);
 
             format!(
@@ -187,8 +187,9 @@ impl Session {
     fn compile_fun(&mut self, fun: &FunDecl) {
         check_dup_bindings(&fun.params);
         let locals = depth(&fun.body);
-        self.emit_instr(Instr::Label(fun_label(fun.name)));
+        self.emit_instr(Instr::Label(fun_prologue_label(fun.name)));
         self.fun_entry(locals, &[Rbp]);
+        self.emit_instr(Instr::Label(fun_body_label(fun.name)));
         self.compile_expr(&Ctxt::with_params(&fun.params), Loc::Reg(Rax), &fun.body, true);
         self.fun_exit(locals, &[Rbp]);
     }
@@ -266,24 +267,45 @@ impl Session {
 
                 // TODO: Need to check if we are in tail position!!
 
-                let mut nargs = args.len() as i32;
-                if nargs % 2 == 0 {
-                    self.emit_instr(Instr::Sub(BinArgs::ToReg(Rsp, Arg32::Imm(8 * nargs))));
-                } else {
+                if !tail {
+                    // Standard Calling Convention
+                    let mut nargs = args.len() as i32;
+                    if nargs % 2 == 0 {
+                        self.emit_instr(Instr::Sub(BinArgs::ToReg(Rsp, Arg32::Imm(8 * nargs))));
+                    } else {
+                        self.emit_instrs([
+                            Instr::Push(Arg32::Imm(MEM_SET_VAL)),
+                            Instr::Sub(BinArgs::ToReg(Rsp, Arg32::Imm(8 * nargs))),
+                        ]);
+                        nargs += 1;
+                    }
+                    for (i, arg) in args.iter().enumerate() {
+                        self.compile_expr(cx, Loc::Mem(mref![Rsp + %(8 * i)]), arg, false);
+                    }
                     self.emit_instrs([
-                        Instr::Push(Arg32::Imm(MEM_SET_VAL)),
-                        Instr::Sub(BinArgs::ToReg(Rsp, Arg32::Imm(8 * nargs))),
+                        Instr::Call(fun_prologue_label(*fun)),
+                        Instr::Add(BinArgs::ToReg(Rsp, Arg32::Imm(8 * nargs))),
                     ]);
-                    nargs += 1;
+                    self.move_to(dst, Arg64::Reg(Rax));
+                } else {
+                    // Tail Calling Convention
+                    // 1. Push each newly computed arg onto the stack
+                    // 2. Pop each of those values into the right spots (in reverse order)
+                    // 3. Jump back to the body of our function
+
+                    // 1. Compile the i-th new argument and overwrite our i-th old argument's
+                    //    location on the stack (use RBP to access these locations)
+                    for (i, arg) in args.iter().enumerate() {
+                        self.compile_expr(cx, Loc::Reg(Reg::Rax), arg, false);
+                        self.emit_instr(Instr::PushR(Reg::Rax));
+                    }
+                    for i in 0..args.len() {
+                        self.emit_instr(Instr::Pop(Loc::Mem(mref![Rbp + %(8 * (args.len()-i+1))])));
+                    }
+                    // 2. Jump back to the body of our function, now that we have updated
+                    //    parameters
+                    self.emit_instr(Instr::Jmp(fun_body_label(*fun)));
                 }
-                for (i, arg) in args.iter().enumerate() {
-                    self.compile_expr(cx, Loc::Mem(mref![Rsp + %(8 * i)]), arg, false);
-                }
-                self.emit_instrs([
-                    Instr::Call(fun_label(*fun)),
-                    Instr::Add(BinArgs::ToReg(Rsp, Arg32::Imm(8 * nargs))),
-                ]);
-                self.move_to(dst, Arg64::Reg(Rax));
             }
             Expr::Nil => {
                 self.move_to(dst, Arg32::Imm(NIL));
@@ -802,6 +824,10 @@ fn raise_wrong_number_of_args(fun: Symbol, expected: usize, got: usize) {
     panic!("function {fun} takes {expected} arguments but {got} were supplied")
 }
 
-fn fun_label(fun: Symbol) -> String {
-    format!("snek_fun_{}", fun.replace("-", "_"))
+fn fun_prologue_label(fun: Symbol) -> String {
+    format!("snek_fun_prologue_{}", fun.replace("-", "_"))
+}
+
+fn fun_body_label(fun: Symbol) -> String {
+    format!("snek_fun_body_{}", fun.replace("-", "_"))
 }

@@ -139,6 +139,7 @@ pub enum Instr {
     Not(Loc),
     Test(BinArgs),
 
+    PushR(Reg),
     Push(Arg32),
     Pop(Loc),
 
@@ -334,6 +335,7 @@ pub fn instr_to_string(i: &Instr) -> String {
         Instr::Sal(args) => format!("  sal {}", bin_args_to_string(*args)),
         Instr::Cmp(args) => format!("  cmp {}", bin_args_to_string(*args)),
         Instr::Test(args) => format!("  test {}", bin_args_to_string(*args)),
+        Instr::PushR(reg) => format!("  push {}", reg_to_string(*reg)),
         Instr::Push(arg) => format!("  push {}", arg32_to_string(*arg)),
         Instr::Pop(loc) => format!("  pop {}", loc_to_string(*loc)),
         Instr::Label(s) => format!("{}:", s),

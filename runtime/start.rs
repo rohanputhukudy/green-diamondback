@@ -289,7 +289,9 @@ pub unsafe fn snek_print_stack(stack_base: *const u64, curr_rbp: *const u64, cur
     println!("-----------------------------------------");
     while ptr >= curr_rsp {
         let val = *ptr;
+        if val != 0 {
             println!("{ptr:?}: {:#0x}", val);
+        }
         ptr = ptr.sub(1);
     }
     println!("-----------------------------------------");
