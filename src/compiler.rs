@@ -265,9 +265,23 @@ impl Session {
                     raise_wrong_number_of_args(*fun, *arity, args.len());
                 }
 
-                // TODO: Need to check if we are in tail position!!
+                if tail {
+                    // Tail Calling Convention
+                    // 1. Push each newly computed arg onto the stack
+                    // 2. Pop each of those values into the right spots (in reverse order)
+                    // 3. Jump back to the body of our function
 
-                if !tail {
+                    for (i, arg) in args.iter().enumerate() {
+                        self.compile_expr(cx, Loc::Reg(Reg::Rax), arg, false);
+                        self.emit_instr(Instr::PushR(Reg::Rax));
+                    }
+
+                    for i in 0..args.len() {
+                        self.emit_instr(Instr::Pop(Loc::Mem(mref![Rbp + %(8 * (args.len()-i+1))])));
+                    }
+
+                    self.emit_instr(Instr::Jmp(fun_body_label(*fun)));
+                } else {
                     // Standard Calling Convention
                     let mut nargs = args.len() as i32;
                     if nargs % 2 == 0 {
@@ -287,24 +301,6 @@ impl Session {
                         Instr::Add(BinArgs::ToReg(Rsp, Arg32::Imm(8 * nargs))),
                     ]);
                     self.move_to(dst, Arg64::Reg(Rax));
-                } else {
-                    // Tail Calling Convention
-                    // 1. Push each newly computed arg onto the stack
-                    // 2. Pop each of those values into the right spots (in reverse order)
-                    // 3. Jump back to the body of our function
-
-                    // 1. Compile the i-th new argument and overwrite our i-th old argument's
-                    //    location on the stack (use RBP to access these locations)
-                    for (i, arg) in args.iter().enumerate() {
-                        self.compile_expr(cx, Loc::Reg(Reg::Rax), arg, false);
-                        self.emit_instr(Instr::PushR(Reg::Rax));
-                    }
-                    for i in 0..args.len() {
-                        self.emit_instr(Instr::Pop(Loc::Mem(mref![Rbp + %(8 * (args.len()-i+1))])));
-                    }
-                    // 2. Jump back to the body of our function, now that we have updated
-                    //    parameters
-                    self.emit_instr(Instr::Jmp(fun_body_label(*fun)));
                 }
             }
             Expr::Nil => {
